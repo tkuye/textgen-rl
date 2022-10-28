@@ -1,20 +1,21 @@
 import torch
 from transformers import T5ForConditionalGeneration, BertForSequenceClassification
 from torch.distributions import Categorical
-from rl_model import BaseMode
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
+from rl_model import BaseModel
+from tqdm import tqdm
+import numpy as np
+import torch.nn.functional as F
 class PPO(BaseModel):
     """
     PPO Class implementation for use with huggingface transformers.
     """
-    def __init__(self, epochs=100, gamma=0.1, env=None, batch_size=32, clip_param=1.0, policy_epochs=10000, value_epochs=10000, lr=1e-4, betas=1.0, eps=1.0, max_grad_norm=1.0, max_steps=1000000, reward_fn=None, filename="ppo", train=True):
+    def __init__(self, epochs=100, gamma=0.1, env=None, batch_size=32, clip_param=1.0, policy_epochs=10000, value_epochs=10000, lr=1e-4, betas=1.0, eps=1.0, max_grad_norm=1.0, max_len=512, filename="ppo", train=True):
         self.epochs = epochs
         self.gamma = gamma
         self.env = env
-        self.reward_fn = reward_fn
-        self.actor = T5ForConditionalGeneration.from_pretrained("t5-small").to(device)
-        self.critic = BertForSequenceClassification.from_pretrained("bert-base-uncased").to(device)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.actor = T5ForConditionalGeneration.from_pretrained("t5-small").to(self.device)
+        self.critic = BertForSequenceClassification.from_pretrained("bert-base-uncased").to(self.device)
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=1e-4)
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=1e-4)
         self.batch_size = batch_size
@@ -25,50 +26,65 @@ class PPO(BaseModel):
         self.betas = betas
         self.eps = eps
         self.max_grad_norm = max_grad_norm
-        self.max_steps = max_steps
         self.filename = filename
+        self.max_len = 512
         if train:
             self.train()
-
-
 
     def to_text(self, input_ids):
         return self.env.tokenizer.decode(input_ids, skip_special_tokens=True)
 
     def act(self, state):
-        outputs = self.actor(state)
+        next_state = self.shift_right(state)
+        next_state = next_state.to(self.device)
+        state = state.to(self.device)
+        
+        outputs = self.actor(input_ids=state, decoder_input_ids=next_state)
         logits = outputs.logits
-        dist = Categorical(logits=logits)
-        action = dist.rsample()
-        action_logprob = dist.log_prob(action)
-        return action.detach().numpy(), action_logprob.detach()
+        logits_softmax = F.softmax(logits, dim=-1)
+        action = logits_softmax.argmax()
+        action_logprob = logits_softmax.max()
+        return action.detach().cpu(), action_logprob.detach().cpu()
 
+    
     def rollout(self):
         state = self.env.reset()
         memory = []
-        for _ in range(self.max_steps):
+        for _ in range(self.max_len):
+            
             action, action_logprob = self.act(state)
-            next_state, reward, done, _ = self.env.step(self.to_text(action), self.reward_fn)
-            memory.append((state, action, action_logprob, reward, next_state, done))
+            next_state, reward, done, _ = self.env.step(action)
+            memory.append([state, action, action_logprob, reward, next_state, done])
             state = next_state
             if done:
                 break
         return memory
-
-
+    
+    def shift_right(self, input_ids):
+        decoder_start_token_id = self.env.tokenizer.pad_token_id
+        assert (
+            decoder_start_token_id is not None
+        ), "self.model.config.decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id. See T5 docs for more information"
+        
+        shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+        shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
+        shifted_input_ids[..., 0] = decoder_start_token_id
+        return shifted_input_ids
+    
+   
     def train(self):
         print("Starting training..")
         for _ in tqdm(range(self.epochs)):
             memory = self.rollout()
             states, actions, action_logprobs, rewards, next_states, dones = zip(*memory)
-            states = torch.tensor(states).to(device)
-            actions = torch.tensor(actions).to(device)
-            action_logprobs = torch.tensor(action_logprobs).to(device)
-            rewards = torch.tensor(rewards).to(device)
-            next_states = torch.tensor(next_states).to(device)
-            dones = torch.tensor(dones).to(device)
+            
+            actions = actions.to(self.device)
+            action_logprobs = action_logprobs.to(self.device)
+            rewards = torch.tensor(rewards).to(self.device)
+            next_states = next_states.to(self.device)
+            dones = torch.tensor(dones).to(self.device)
             returns = self.compute_returns(rewards, dones)
-            advantages = returns - self.critic(states).logits
+            advantages = returns - self.critic(input_ids=states, decoder_input_ids=self.shift_right(states)).logits
 
             for _ in range(self.policy_epochs):
                 _, new_action_logprobs = self.act(states)
@@ -82,7 +98,7 @@ class PPO(BaseModel):
                 self.actor_optim.step()
 
             for _ in range(self.value_epochs):
-                values = self.critic(states).logits
+                values = self.critic(input_ids=states, decoder_input_ids=self.shift_right(states)).logits
                 value_loss = (returns - values).pow(2).mean()
                 self.critic_optim.zero_grad()
                 value_loss.backward()

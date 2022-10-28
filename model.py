@@ -2,6 +2,7 @@ from transformers import T5ForConditionalGeneration, BertForSequenceClassificati
 import torch
 from torch import nn
 from torch.distributions import Categorical
+import torch.nn.functional as F
 
 class Policy(nn.Module):
     def __init__(self, file_path="t5-small"):
@@ -11,10 +12,10 @@ class Policy(nn.Module):
     def sample(self, state):
         outputs = self.model(state)
         logits = outputs.logits
-        dist = Categorical(logits=logits)
-        action = dist.rsample()
-        action_logprob = dist.log_prob(action)
-        return action, action_logprob
+        logits_softmax = F.softmax(logits, dim=-1)
+        action = logits_softmax.argmax()
+        action_logprob = logits_softmax.max()
+        return action.detach().cpu(), action_logprob.detach().cpu()
 
     def forward(self, state):
         raise NotImplementedError

@@ -6,6 +6,7 @@ from model import Policy, QNetwork
 from rl_model import BaseModel
 from tqdm import tqdm
 
+
 class SoftActorCritic(BaseModel):
     def __init__(self, epochs=100, gamma=0.99, env=None, batch_size=32, buffer_size=100000, policy_lr=1e-4, qf_lr=1e-5, policy_file_path="policy.pt", qf_file_path="critic.pt", reward_fn=None, train=True):
         self.epochs = epochs
@@ -42,8 +43,10 @@ class SoftActorCritic(BaseModel):
         return self.env.tokenizer.decode(state)
 
 
-    def update(self):
+    def train(self):
+        print('Starting training...')
         for _ in range(self.epochs):
+            self.learn()
             states, actions, rewards, states_, dones = self.buffer.sample_buffer(self.batch_size)
             ## update Q functions
             
@@ -66,7 +69,8 @@ class SoftActorCritic(BaseModel):
             policy_loss.backward()
             self.policy_optim.step()
             self.qf_optim.step()
-
+            self.save()
+        
     def learn(self):
         total_reward = 0
         state = self.env.reset()
@@ -81,15 +85,6 @@ class SoftActorCritic(BaseModel):
                 self.update()
         return total_reward
 
-    def train(self):
-        print('Starting training...')
-        total_rewards = []
-        for i in tqdm(range(self.epochs)):
-            total_reward = self.learn()
-            total_rewards.append(total_reward)
-            if i % 10 == 0:
-                print("Epoch: {}, Total Reward: {}".format(i, total_reward))
-                self.save()
         
     def save(self):
         print("... saving models ...")
@@ -99,8 +94,4 @@ class SoftActorCritic(BaseModel):
     @classmethod
     def load(policy_file_path, qf_file_path):
         return SoftActorCritic(policy_file_path=policy_file_path, qf_file_path=qf_file_path)
-
-
-
-
 

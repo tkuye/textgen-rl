@@ -3,7 +3,6 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-
 class Policy(nn.Module):
     def __init__(self, file_path="t5-small"):
         self.model = T5ForConditionalGeneration.from_pretrained(file_path)

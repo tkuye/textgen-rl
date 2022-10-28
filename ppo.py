@@ -1,8 +1,7 @@
 import torch
 from transformers import T5ForConditionalGeneration, BertForSequenceClassification
 from torch.distributions import Categorical
-from rl_model import BaseModel
-
+from rl_model import BaseMode
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class PPO(BaseModel):
@@ -44,7 +43,6 @@ class PPO(BaseModel):
         action_logprob = dist.log_prob(action)
         return action.detach().numpy(), action_logprob.detach()
 
-    
     def rollout(self):
         state = self.env.reset()
         memory = []
@@ -59,7 +57,7 @@ class PPO(BaseModel):
 
 
     def train(self):
-        print("Starint training..")
+        print("Starting training..")
         for _ in tqdm(range(self.epochs)):
             memory = self.rollout()
             states, actions, action_logprobs, rewards, next_states, dones = zip(*memory)
@@ -91,7 +89,7 @@ class PPO(BaseModel):
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
                 self.critic_optim.step()
 
-        self.save()
+            self.save()
     
     def compute_returns(self, rewards, dones):
         returns = torch.zeros_like(rewards)
@@ -104,6 +102,7 @@ class PPO(BaseModel):
     
     
     def save(self):
+        print("Saving model..")
         torch.save(self.actor.state_dict(), self.filename + "_actor")
         torch.save(self.critic.state_dict(), self.filename + "_critic")
 

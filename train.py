@@ -3,7 +3,7 @@ from env import TextGym
 from transformers import  BertTokenizer
 from ppo import PPO
 from sac import SoftActorCritic
-## Define the reward function here to be whatever you want.
+
 def reward_fn(state, info):
     if "reward_count" not in info:
         info["reward_count"] = 0

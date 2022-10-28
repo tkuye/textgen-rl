@@ -28,12 +28,14 @@ class TextGym(gym.Env):
         ## We take a random action with probability rand_action_prob
         if random.random() < rand_action_prob:
             action = self.action_space.sample()
+            
         
         state_text = self.tokenizer.batch_decode(self.state)[0]
         action_text = self.tokenizer.batch_decode(action)[0]
         state_text = re.sub('(</s>|<pad>)', '', state_text)
         action_text = re.sub('(</s>|<pad>)', '', action_text)
         state_text += action_text
+       
         self.current_length = self.tokenizer(state_text, return_tensors='pt').input_ids.size()[-1]
         self.state = self.tokenizer(state_text, padding='max_length', max_length=512, return_tensors='pt').input_ids
         if self.current_length >= self.max_length:

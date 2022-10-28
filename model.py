@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
+
 class Policy(nn.Module):
     def __init__(self, file_path="t5-small"):
         self.model = T5ForConditionalGeneration.from_pretrained(file_path)
@@ -15,11 +16,11 @@ class Policy(nn.Module):
         action = dist.rsample()
         action_logprob = dist.log_prob(action)
         return action, action_logprob
-    
+
     def forward(self, state):
         raise NotImplementedError
 
-    
+
 class QNetwork(nn.Module):
     def __init__(self, file_path="t5-small"):
         self.q1 = BertForSequenceClassification.from_pretrained(file_path, num_labels=1)

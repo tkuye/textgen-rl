@@ -3,13 +3,15 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 import torch.nn as nn
 from buffer import ReplayBuffer 
 from model import Policy, QNetwork
+from rl_model import BaseModel
+from tqdm import tqdm
 
-
-class SoftActorCritic:
-    def __init__(self, epochs, gamma, env, batch_size, buffer_size, policy_lr, qf_lr, policy_file_path, qf_file_path):
+class SoftActorCritic(BaseModel):
+    def __init__(self, epochs=100, gamma=0.99, env=None, batch_size=32, buffer_size=100000, policy_lr=1e-4, qf_lr=1e-5, policy_file_path="policy.pt", qf_file_path="critic.pt", reward_fn=None, train=True):
         self.epochs = epochs
         self.gamma = gamma
-
+        self.env = env
+        self.reward_fn = reward_fn
         ## Our Q functions
         self.actor = QNetwork()
         self.critic = QNetwork()
@@ -27,16 +29,18 @@ class SoftActorCritic:
 
         self.policy.load_state_dict(torch.load(self.policy_file_path))
         self.critic.load_state_dict(torch.load(self.qf_file_path))
-       
         self.batch_size = batch_size
+        if train:
+            self.train()
         
-
     def act(self, state):
         action, _ = self.policy.sample(state)
         return action
 
-    def save(self, path):
-        torch.save(self.policy.model.state_dict(), path)
+    
+    def to_text(self, state):
+        return self.env.tokenizer.decode(state)
+
 
     def update(self):
         for _ in range(self.epochs):
@@ -69,7 +73,7 @@ class SoftActorCritic:
         done = False
         while not done:
             action = self.act(state)
-            state_, reward, done, _ = self.env.step(action)
+            state_, reward, done, _ = self.env.step(self.to_text(action), self.reward_fn)
             self.buffer.store_transition(state, action, reward, state_, done)
             state = state_
             total_reward += reward
@@ -78,21 +82,23 @@ class SoftActorCritic:
         return total_reward
 
     def train(self):
+        print('Starting training...')
         total_rewards = []
-        for i in range(self.epochs):
+        for i in tqdm(range(self.epochs)):
             total_reward = self.learn()
             total_rewards.append(total_reward)
             if i % 10 == 0:
                 print("Epoch: {}, Total Reward: {}".format(i, total_reward))
-                self.save_models()
-        return total_rewards
-
-
-    def save_models(self):
+                self.save()
+        
+    def save(self):
         print("... saving models ...")
         self.policy.save(self.policy_file_path)
         self.critic.save(self.qf_file_path)
     
+    @classmethod
+    def load(policy_file_path, qf_file_path):
+        return SoftActorCritic(policy_file_path=policy_file_path, qf_file_path=qf_file_path)
 
 
 

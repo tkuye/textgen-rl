@@ -1,16 +1,19 @@
 import torch
 from transformers import T5ForConditionalGeneration, BertForSequenceClassification
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 from torch.distributions import Categorical
+from rl_model import BaseModel
 
-class PPO:
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+class PPO(BaseModel):
     """
     PPO Class implementation for use with huggingface transformers.
     """
-    def __init__(self, epochs, gamma, env, batch_size, clip_param, policy_epochs, value_epochs, lr, betas, eps, max_grad_norm, entropy_coef, value_loss_coef, max_steps):
+    def __init__(self, epochs=100, gamma=0.1, env=None, batch_size=32, clip_param=1.0, policy_epochs=10000, value_epochs=10000, lr=1e-4, betas=1.0, eps=1.0, max_grad_norm=1.0, max_steps=1000000, reward_fn=None, filename="ppo", train=True):
         self.epochs = epochs
         self.gamma = gamma
         self.env = env
+        self.reward_fn = reward_fn
         self.actor = T5ForConditionalGeneration.from_pretrained("t5-small").to(device)
         self.critic = BertForSequenceClassification.from_pretrained("bert-base-uncased").to(device)
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=1e-4)
@@ -23,10 +26,15 @@ class PPO:
         self.betas = betas
         self.eps = eps
         self.max_grad_norm = max_grad_norm
-        self.entropy_coef = entropy_coef
-        self.value_loss_coef = value_loss_coef
         self.max_steps = max_steps
+        self.filename = filename
+        if train:
+            self.train()
 
+
+
+    def to_text(self, input_ids):
+        return self.env.tokenizer.decode(input_ids, skip_special_tokens=True)
 
     def act(self, state):
         outputs = self.actor(state)
@@ -37,22 +45,22 @@ class PPO:
         return action.detach().numpy(), action_logprob.detach()
 
     
-
     def rollout(self):
         state = self.env.reset()
         memory = []
         for _ in range(self.max_steps):
             action, action_logprob = self.act(state)
-            next_state, reward, done, _ = self.env.step(action)
+            next_state, reward, done, _ = self.env.step(self.to_text(action), self.reward_fn)
             memory.append((state, action, action_logprob, reward, next_state, done))
             state = next_state
             if done:
                 break
         return memory
 
-    
-    def update(self):
-        for _ in range(self.epochs):
+
+    def train(self):
+        print("Starint training..")
+        for _ in tqdm(range(self.epochs)):
             memory = self.rollout()
             states, actions, action_logprobs, rewards, next_states, dones = zip(*memory)
             states = torch.tensor(states).to(device)
@@ -63,6 +71,7 @@ class PPO:
             dones = torch.tensor(dones).to(device)
             returns = self.compute_returns(rewards, dones)
             advantages = returns - self.critic(states).logits
+
             for _ in range(self.policy_epochs):
                 _, new_action_logprobs = self.act(states)
                 ratio = (new_action_logprobs - action_logprobs).exp()
@@ -74,7 +83,6 @@ class PPO:
                 torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                 self.actor_optim.step()
 
-
             for _ in range(self.value_epochs):
                 values = self.critic(states).logits
                 value_loss = (returns - values).pow(2).mean()
@@ -82,6 +90,8 @@ class PPO:
                 value_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
                 self.critic_optim.step()
+
+        self.save()
     
     def compute_returns(self, rewards, dones):
         returns = torch.zeros_like(rewards)
@@ -92,14 +102,17 @@ class PPO:
         return returns
 
     
-    def train(self):
-        for epoch in range(self.epochs):
-            self.update()
-            print("Epoch: {}".format(epoch))
-        self.save("ppo")
     
-    def save(self, filename):
-        torch.save(self.actor.state_dict(), filename + "_actor")
-        torch.save(self.critic.state_dict(), filename + "_critic")
+    def save(self):
+        torch.save(self.actor.state_dict(), self.filename + "_actor")
+        torch.save(self.critic.state_dict(), self.filename + "_critic")
+
+
+    @classmethod
+    def load(cls, filename):
+        model = cls(train=False)
+        model.actor.load_state_dict(torch.load(filename + "_actor"))
+        model.critic.load_state_dict(torch.load(filename + "_critic"))
+        return model
 
 

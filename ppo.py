@@ -29,7 +29,7 @@ class PPO(BaseModel):
         self.eps = eps
         self.max_grad_norm = max_grad_norm
         self.filename = filename
-        self.max_len = 512
+        self.max_len = max_len
         if train:
             self.train()
 
@@ -47,14 +47,15 @@ class PPO(BaseModel):
         next_state = self.actor._shift_right(state)
         next_state = next_state.to(self.device)
         state = state.to(self.device)
-        outputs = self.actor(input_ids=state, decoder_input_ids=next_state)
+        attention_masks = torch.where(next_state != 0, 1, 0)
+        outputs = self.actor(input_ids=state, decoder_input_ids=next_state, attention_mask=attention_masks)
         logits = outputs.logits
         logits = logits[:, -1, :] 
         logits = self.top_k_logits(logits, 1)
         log_probs = F.softmax(logits, dim=-1)
         action = torch.multinomial(log_probs, num_samples=1)
         action_logprob = log_probs[:, action]
-        print(action, action_logprob)
+        
         return action.detach().cpu(), action_logprob.detach().cpu()
 
     
@@ -69,10 +70,8 @@ class PPO(BaseModel):
             if done:
                 break
         return memory
-    
 
-    
-   
+
     def train(self):
         print("Starting training..")
         for _ in tqdm(range(self.epochs)):
@@ -81,21 +80,27 @@ class PPO(BaseModel):
             returns = self.compute_returns(rewards, dones)
             critic_logits = []
             
+            states = torch.tensor(list(states)).to(self.device)
+            
             for state in states:
                 state = state.to(self.device)
-                logits = self.critic(input_ids=state).logits
+                attention_masks = torch.where(state != 0, 1, 0)
+                logits = self.critic(input_ids=state, attention_mask=attention_masks).logits
                 critic_logits.append(F.softmax(logits, dim=-1).argmax(dim=-1).detach().cpu())
                     
-            advantages = returns - torch.tensor(critic_logits)
-
+            advantages = returns - torch.tensor(critic_logits).to(dtype=torch.float32)
+            advantages = (advantages - advantages.mean(dtype=torch.float32)) / (advantages.std() + 1e-5)
+            
+            new_action_logprobs_ = torch.tensor(list(action_logprobs)).to(self.device)
             for _ in range(self.policy_epochs):
                 new_action_logprobs_ = []
-                for state in states:
+                for state in next_states:
                     state = state.to(self.device)
                     _, new_action_logprobs = self.act(state)
                     new_action_logprobs_.append(new_action_logprobs)
                     
                 ratio = (torch.tensor(new_action_logprobs_) - torch.tensor(action_logprobs)).exp()
+
                 surr1 = ratio * advantages
                 surr2 = torch.clamp(ratio, 1 - self.clip_param, 1 + self.clip_param) * advantages
                 policy_loss = -torch.min(surr1, surr2).mean()

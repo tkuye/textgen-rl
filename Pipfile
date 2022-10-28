@@ -8,6 +8,7 @@ torch = "*"
 transformers = "*"
 gym = "*"
 tqdm = "*"
+sentencepiece = "*"
 
 [dev-packages]
 

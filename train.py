@@ -3,8 +3,7 @@ from env import TextGym
 from transformers import  T5Tokenizer
 from ppo import PPO
 from sac import SoftActorCritic
-import gym
-tokenizer = T5Tokenizer.from_pretrained('t5-small')
+tokenizer = T5Tokenizer.from_pretrained('t5-small', model_max_length=512)
 
 def reward_fn(state, info):
     if "reward_count" not in info:

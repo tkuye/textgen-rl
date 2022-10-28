@@ -12,19 +12,16 @@ def reward_fn(state, info):
         info["reward_count"] += 1
     
     text = tokenizer.batch_decode(state, skip_special_tokens=True)[0]
-
-    if text.count('hello') <= 1:
-        return -1
-    else:
-        return text.count('hello')
+    return len(text.split(' '))
 
 def main():
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--n_epochs', type=int, default=10)
     parser.add_argument('--max_length', type=int, default=512)
-    parser.add_argument('--n_actions', type=int, default=50257)
+    parser.add_argument('--n_actions', type=int, default=32128)
     parser.add_argument('--input_shape', type=int, default=768)
     parser.add_argument('--max_time_steps', type=int, default=10000)
     parser.add_argument('--gamma', type=float, default=0.99)

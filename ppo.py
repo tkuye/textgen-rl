@@ -7,29 +7,32 @@ import numpy as np
 import torch.nn.functional as F
 import torch.nn as nn
 
+
+
 class Policy(nn.Module):
     def __init__(self):
         super(Policy, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.actor = T5ForConditionalGeneration.from_pretrained("t5-small").to(self.device)
-        self.critic = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=1).to(self.device)
+        self.critic = BertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=1).to(self.device)
+        
 
     def forward(self):
         raise NotImplementedError
 
     def act(self, state):
+        state = state.unsqueeze(0)
         next_state = self.actor._shift_right(state)
         next_state = next_state.to(self.device)
         state = state.to(self.device)
         attention_masks = torch.where(next_state != 0, 1, 0)
         outputs = self.actor(input_ids=state, decoder_input_ids=next_state, attention_mask=attention_masks)
         logits = outputs.logits
-        logits = logits[:, -1, :] 
+        logits = logits[-1, :, :] 
         logits = self.top_k_logits(logits, 1)
         log_probs = F.softmax(logits, dim=-1)
-        action = torch.multinomial(log_probs, num_samples=1)
-        action_logprob = log_probs[:, action]
-        return action.detach().cpu(), action_logprob.detach().cpu()
+        action_logprob, action = log_probs.max(dim=-1)
+        return action.cpu(), action_logprob.cpu()
 
     
     def evaluate(self, state, action):
@@ -42,12 +45,12 @@ class Policy(nn.Module):
         logits = logits[:, -1, :] 
         logits = self.top_k_logits(logits, 1)
         log_probs = F.softmax(logits, dim=-1)
-        action = torch.multinomial(log_probs, num_samples=1)
-        action_logprob = log_probs[:, action].detach().cpu()
+        action_logprob, action = log_probs.max(dim=-1)
+        state = state * (state <= self.critic.config.vocab_size)
         state_logits = self.critic(input_ids=state, attention_mask=attention_masks).logits.detach().cpu()
-        return action_logprob, state_logits
+        return action_logprob.detach().cpu(), state_logits
 
-    
+
     def top_k_logits(self, logits, k):
         if k == 0:
             return logits
@@ -108,8 +111,9 @@ class PPO(BaseModel):
         for _ in range(self.epochs):
             logprobs, state_values = self.policy.evaluate(old_states, old_actions)
             advantages = returns - state_values
+            
             advantages = (advantages - advantages.mean(dtype=torch.float32)) / (advantages.std() + 1e-5)
-            ratio = (logprobs - old_logprobs).exp()
+            ratio = (logprobs - old_logprobs).exp().view(-1, 0)
             surr1 = ratio * advantages
             surr2 = torch.clamp(ratio, 1 - self.clip_param, 1 + self.clip_param) * advantages
             
@@ -122,7 +126,6 @@ class PPO(BaseModel):
             ## Copy new weights to old policy.
         self.old_policy.load_state_dict(self.policy.state_dict())
         
-
 
     def train(self, show_steps=3):
         print_running_reward = 0
@@ -138,7 +141,6 @@ class PPO(BaseModel):
                 print_running_episodes = 0
                 self.save()
 
-
             print_running_reward += self.ep_reward
             print_running_episodes += 1
             self.ep_reward = 0
@@ -151,7 +153,6 @@ class PPO(BaseModel):
             returns[t] = running_return
         return returns
 
-    
     
     def save(self):
         print("\nSaving model..\n")
